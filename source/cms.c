@@ -283,6 +283,7 @@ int aws_cms_cipher_decrypt(
         return AWS_OP_ERR;
     }
 
+    int result = AWS_OP_ERR;
     EVP_CIPHER_CTX *ctx = EVP_CIPHER_CTX_new();
     if (ctx == NULL) {
         return AWS_OP_ERR;
@@ -290,27 +291,33 @@ int aws_cms_cipher_decrypt(
 
     /* Setup the decryption context */
     if (!EVP_DecryptInit_ex(ctx, EVP_aes_256_cbc(), NULL, key->buffer, iv->buffer)) {
-        EVP_CIPHER_CTX_free(ctx);
-        return AWS_OP_ERR;
+        goto cleanup_ctx;
     }
 
     /* Output: ciphertext_len + the block length minus one */
     int ulen, flen;
-    uint8_t out_text[ciphertext->len + EVP_CIPHER_CTX_block_size(ctx)];
+    size_t out_len = ciphertext->len + EVP_CIPHER_CTX_block_size(ctx);
+    uint8_t *out_text = aws_mem_acquire(aws_nitro_enclaves_get_allocator(), out_len);
+    if (!out_text) {
+        goto cleanup_ctx;
+    }
+
     if (!EVP_DecryptUpdate(ctx, out_text, &ulen, ciphertext->buffer, ciphertext->len) ||
         !EVP_DecryptFinal_ex(ctx, &out_text[ulen], &flen)) {
-        EVP_CIPHER_CTX_free(ctx);
-        return AWS_OP_ERR;
+        goto cleanup_out_text;
     }
 
     /* Construct the plaintext output buffer. */
     struct aws_byte_cursor cursor = aws_byte_cursor_from_array(out_text, ulen + flen);
     if (AWS_OP_SUCCESS != aws_byte_buf_init_copy_from_cursor(plaintext, aws_nitro_enclaves_get_allocator(), cursor)) {
-        EVP_CIPHER_CTX_free(ctx);
-        return AWS_OP_ERR;
+        goto cleanup_out_text;
     }
 
-    EVP_CIPHER_CTX_free(ctx);
+    result = AWS_OP_SUCCESS;
 
-    return AWS_OP_SUCCESS;
+cleanup_out_text:
+    aws_mem_release(aws_nitro_enclaves_get_allocator(), out_text);
+cleanup_ctx:
+    EVP_CIPHER_CTX_free(ctx);
+    return result;
 }
