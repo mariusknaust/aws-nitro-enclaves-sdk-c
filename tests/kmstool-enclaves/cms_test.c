@@ -200,3 +200,40 @@ static int s_test_cms_envelope_ctx_specific(struct aws_allocator *allocator, voi
 
     return SUCCESS;
 }
+
+/* Test that large ciphertext doesn't cause stack exhaustion and is handled gracefully */
+AWS_TEST_CASE(test_cms_large_ciphertext, s_test_cms_large_ciphertext)
+static int s_test_cms_large_ciphertext(struct aws_allocator *allocator, void *ctx) {
+    (void)ctx;
+
+    aws_nitro_enclaves_library_init(allocator);
+
+    /* Create a large ciphertext buffer (10MB) that would cause stack exhaustion with VLA */
+    size_t large_size = 10 * 1024 * 1024;
+    struct aws_byte_buf large_ciphertext;
+    ASSERT_SUCCESS(aws_byte_buf_init(&large_ciphertext, allocator, large_size));
+    memset(large_ciphertext.buffer, 0xAA, large_size);
+    large_ciphertext.len = large_size;
+
+    /* Create valid key and IV for AES-256-CBC */
+    struct aws_byte_buf key, iv, plaintext;
+    ASSERT_SUCCESS(aws_byte_buf_init(&key, allocator, 32));
+    memset(key.buffer, 0x00, 32);
+    key.len = 32;
+
+    ASSERT_SUCCESS(aws_byte_buf_init(&iv, allocator, 16));
+    memset(iv.buffer, 0x00, 16);
+    iv.len = 16;
+
+    /* This should fail gracefully (invalid ciphertext), but not crash from stack exhaustion */
+    int result = aws_cms_cipher_decrypt(&large_ciphertext, &key, &iv, &plaintext);
+    ASSERT_TRUE(result == AWS_OP_ERR);
+
+    aws_byte_buf_clean_up(&large_ciphertext);
+    aws_byte_buf_clean_up(&key);
+    aws_byte_buf_clean_up(&iv);
+
+    aws_nitro_enclaves_library_clean_up();
+
+    return SUCCESS;
+}
